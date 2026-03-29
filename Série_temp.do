@@ -325,3 +325,5 @@ varsoc `vars'
 vecrank `vars', lag(4) trace
 vecrank `vars', lag(4) max
 *ttttt
+
+* Calcul des persistances version 1
