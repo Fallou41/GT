@@ -324,3 +324,4 @@ local vars "lnagri lnman lncom lntran lnheb lnimmo lnautre"
 varsoc `vars'
 vecrank `vars', lag(4) trace
 vecrank `vars', lag(4) max
+*ttttt
