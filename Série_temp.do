@@ -326,4 +326,24 @@ vecrank `vars', lag(4) trace
 vecrank `vars', lag(4) max
 *ttttt
 
-* Calcul des persistances version 1
+*************** Calcul des persistances globale
+gen lninfor = ln(informel)
+** On regresse la variable différenciée
+gen dlninfor = D.lninfor
+** Sélection de lag optimal
+varsoc dlninfor // Le lag optimal est 0. On a une marche aléatoire
+* Tester la robustesse
+foreach p in 0 1 2 {
+    if `p' == 0 {
+        di "AR(0) : P = 1"
+    }
+    else {
+        regress dlninfor L(1/`p').dlninfor
+        local somme_phi = 0
+        forvalues j = 1/`p' {
+            local somme_phi = `somme_phi' + _b[L`j'.dlninfor]
+        }
+        local P = abs(1/(1-`somme_phi'))
+        di "AR(`p') : P = " %6.4f `P'
+    }
+} 
