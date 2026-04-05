@@ -1,7 +1,8 @@
-cd "C:\Users\USER\Desktop\ISE3_2025\GT\base"
+cd "D:\Users\hp\Documents\bibliothèque de travail\2 Elève ingénieur\ISE\Cours\ISE3\Tronc commun\UE15 Recherche\Groupe de travail\data\raw"
 clear all
 set more off
 use "base"
+
 
 *********************************Description des données**********************************
 **** Création des variables logarithme
@@ -327,13 +328,32 @@ vecrank `vars', lag(4) max
 *ttttt
 
 *************** Calcul des persistances globale
+
+
 gen lninfor = ln(informel)
 ** On regresse la variable différenciée
 gen dlninfor = D.lninfor
 ** Sélection de lag optimal
 varsoc dlninfor // Le lag optimal est 0. On a une marche aléatoire
+
+
+dfuller lninfor
+
+dfuller dlninfor
+
+
+
+ac dlninfor
+
+pac dlninfor
+
+twoway (line dlninfor Annee)
+
+twoway (line lninfor Annee)
+
+
 * Tester la robustesse
-foreach p in 0 1 2 {
+foreach p in 0 1 2 3 4 5 6 7{
     if `p' == 0 {
         di "AR(0) : P = 1"
     }
@@ -347,3 +367,6 @@ foreach p in 0 1 2 {
         di "AR(`p') : P = " %6.4f `P'
     }
 } 
+
+
+
