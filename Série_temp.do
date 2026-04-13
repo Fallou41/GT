@@ -1,4 +1,4 @@
-cd "D:\Users\hp\Documents\bibliothèque de travail\2 Elève ingénieur\ISE\Cours\ISE3\Tronc commun\UE15 Recherche\Groupe de travail\data\raw"
+cd "C:\Users\USER\Desktop\ISE3_2025\GT\base"
 clear all
 set more off
 use "base"
@@ -24,15 +24,14 @@ vecrank `vars', lag(4) trace
 vecrank `vars', lag(4) max
 *ttttt
 
-<<<<<<< HEAD
+
 *************** Calcul des persistances globale
 
 
 gen lninfor = ln(informel)
 ** On regresse la variable différenciée
 gen dlninfor = D.lninfor
-** Sélection de lag optimal
-varsoc dlninfor // Le lag optimal est 0. On a une marche aléatoire
+
 
 
 dfuller lninfor
@@ -50,16 +49,10 @@ twoway (line dlninfor Annee)
 twoway (line lninfor Annee)
 
 
-* Tester la robustesse
-foreach p in 0 1 2 3 4 5 6 7{
-    if `p' == 0 {
-        di "AR(0) : P = 1"
-=======
+
+
 *************** Calcul des persistances globale univariée
 ***La persistance avec un AR
-gen lninfor = ln(informel) //Comme la variable n'est pas stationnaire
-** On regresse la variable différenciée
-gen dlninfor = D.lninfor
 ** Sélection de lag optimal
 varsoc dlninfor, maxlag(5) // Le lag optimal est 5. 
 *** On a un AR(5)
@@ -209,7 +202,7 @@ foreach var of local secteurs {
 
         * f̂(0) += 2 · w(j) · γ(j)
         scalar f0_`var' = f0_`var' + 2 * w_j * gamma_j
->>>>>>> ba09e9fcdde3491ae62cd51df508979baccebc0a
+
     }
 
     * --- P²ᵢ = f̂(0)ᵢᵢ / σ²ᵢ ---
@@ -356,11 +349,7 @@ foreach var of local secteurs {
         scalar gamma_j = r(cov_12)
         scalar f0_`var' = f0_`var' + 2 * w_j * gamma_j
     }
-<<<<<<< HEAD
-} 
-=======
-
-    * --- P²ᵢ = f̂(0)ᵢᵢ / σ²ᵢ ---
+	* --- P²ᵢ = f̂(0)ᵢᵢ / σ²ᵢ ---
     scalar P_sq_`var' = f0_`var' / sigma2_`var'
     scalar P_`var'    = sqrt(abs(P_sq_`var'))
 
@@ -374,7 +363,9 @@ foreach var of local secteurs {
        %8.4f P_sq_`var' %8.4f P_`var' "   `interp'"
 
     local i = `i' + 1
-}
+
+} 
+
 
 di "  " "{hline 78}"
 
@@ -463,13 +454,3 @@ di "============================================================"
 foreach var of local secteurs {
     drop reste_`var' resid_`var'
 }
-
-
-
-
-
-
->>>>>>> ba09e9fcdde3491ae62cd51df508979baccebc0a
-
-
-
