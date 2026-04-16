@@ -404,6 +404,7 @@ di "============================================================"
 * --- lnL_NC : VAR(4) non contraint ---
 quietly var `secteurs', lags(1/`p')
 scalar ll_NC = e(ll)
+*scalar ll_NC = e(ll_dfk)
 
 * --- lnL_C : modèle contraint via |Sigma_C| ---
 * Sigma_C construite à partir des résidus déjà disponibles
@@ -665,6 +666,7 @@ di "  " "{hline 75}"
 
 quietly var `secteurs', lags(1/`p')
 scalar ll_NC = e(ll)
+*scalar ll_NC = e(ll_dfk)
 scalar K_NC  = `m' * (`m'*`p' + 1)
 
 matrix Sigma_sel = J(`m', `m', 0)
