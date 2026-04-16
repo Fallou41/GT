@@ -454,3 +454,265 @@ di "============================================================"
 foreach var of local secteurs {
     drop reste_`var' resid_`var'
 }
+
+
+/*===========================================================
+  MODÈLE CONTRAINT SÉLECTIF — SEUIL |t| > 1.5
+  Pour chaque secteur i :
+    1. Régression complète : L(1/4).vi + L(1/4).vj pour tout j≠i
+    2. Pour chaque j≠i : tester si AU MOINS UN lag a |t| > 1.5
+    3. Construire reste_sig_i = somme des vj retenus
+    4. Ré-estimer : L(1/4).vi + L(1/4).reste_sig_i
+    5. Persistance via densité spectrale
+===========================================================*/
+
+local secteurs "d_lnagri d_lnman d_lncom d_lntran d_lnheb d_lnimmo d_lnautre"
+local noms     "Agri Manufact Commerce Transport Hébergement Immo Autres"
+local m   = 7
+local p   = 4
+local seuil_t = 1.5
+
+/*-----------------------------------------------------------
+  ÉTAPE 1 : Pour chaque secteur i, régression complète
+  puis vérifier pour chaque j≠i si au moins un lag
+  de j a |t| > 1.5
+-----------------------------------------------------------*/
+
+di _newline(1)
+di "============================================================"
+di "  SÉLECTION — Au moins un lag |t| > `seuil_t' par variable"
+di "============================================================"
+
+local i = 1
+foreach vi of local secteurs {
+
+    local nom_i : word `i' of `noms'
+    di _newline(1) "  >>> Équation : `nom_i' (`vi')"
+    di "  " "{hline 55}"
+
+    * Régression complète : propres lags + lags de chaque j≠i
+    *quietly regress `vi' L(1/`p').`vi' ///
+	 regress `vi' L(1/`p').`vi' ///
+        L(1/`p').d_lnagri L(1/`p').d_lnman  L(1/`p').d_lncom  ///
+        L(1/`p').d_lntran L(1/`p').d_lnheb  L(1/`p').d_lnimmo ///
+        L(1/`p').d_lnautre
+
+    * Pour chaque j≠i : vérifier si au moins un lag |t| > seuil
+    local sig_vars_`vi' ""
+	
+    local j = 1
+    foreach vj of local secteurs {
+
+        if "`vi'" != "`vj'" {
+
+            local nom_j : word `j' of `noms'
+
+            * Tester chaque lag de vj
+            local at_least_one = 0
+            local t_vals ""
+
+            forvalues k = 1/`p' {
+                scalar t_k = _b[L`k'.`vj'] / _se[L`k'.`vj']
+				local t_vals "`t_vals' `=string(abs(t_k), "%5.2f")'"
+                *local t_vals "`t_vals' " %5.2f abs(t_k)
+
+                if abs(t_k) > `seuil_t' {
+                    local at_least_one = 1
+                }
+            }
+			
+
+            if `at_least_one' == 1 {
+                local sig_vars_`vi' "`sig_vars_`vi'' `vj'"
+                di "  RETENU  : `nom_j' — |t| max > `seuil_t'"
+            }
+            else {
+                di "  exclu   : `nom_j' — aucun lag |t| > `seuil_t'"
+            }
+        }
+        local j = `j' + 1
+    }
+
+    if "`sig_vars_`vi''" == "" {
+        di "  → Aucune variable externe retenue : AR(`p') pur"
+    }
+    else {
+        di "  → Variables retenues : `sig_vars_`vi''"
+    }
+
+    local i = `i' + 1
+}
+
+
+/*-----------------------------------------------------------
+  ÉTAPE 2 : Construire reste_sig_i = somme des vj retenus
+-----------------------------------------------------------*/
+
+di _newline(1)
+di "============================================================"
+di "  ÉTAPE 2 : CONSTRUCTION DES AGRÉGATS SÉLECTIFS"
+di "============================================================"
+
+local i = 1
+foreach vi of local secteurs {
+
+    local nom_i : word `i' of `noms'
+    capture drop reste_sig_`vi'
+
+    if "`sig_vars_`vi''" == "" {
+        gen reste_sig_`vi' = 0
+        di "  `nom_i' : reste_sig = 0"
+    }
+    else {
+        gen reste_sig_`vi' = 0
+        foreach vj of local sig_vars_`vi' {
+            replace reste_sig_`vi' = reste_sig_`vi' + `vj'
+        }
+        di "  `nom_i' : reste_sig = Σ(`sig_vars_`vi'')"
+    }
+    local i = `i' + 1
+}
+
+/*-----------------------------------------------------------
+  ÉTAPE 3 : Ré-estimation contrainte
+  d_lni = μ + Σα·L(1/4).d_lni + Σβ·L(1/4).reste_sig_i + ε
+-----------------------------------------------------------*/
+
+di _newline(1)
+di "============================================================"
+di "  ÉTAPE 3 : ESTIMATION CONTRAINTE SÉLECTIVE"
+di "============================================================"
+
+local i = 1
+foreach vi of local secteurs {
+
+    local nom_i : word `i' of `noms'
+    di _newline(1) "  >>> `nom_i' (`vi')"
+
+    capture drop resid_sel_`vi'
+
+    if "`sig_vars_`vi''" == "" {
+        regress `vi' L(1/`p').`vi'
+        di "    Modèle : AR(`p') pur"
+    }
+    else {
+        regress `vi' L(1/`p').`vi' L(1/`p').reste_sig_`vi'
+        di "    Modèle : AR(`p') + L(1/`p').reste_sig"
+        di "    Composantes de reste_sig : `sig_vars_`vi''"
+    }
+
+    quietly predict resid_sel_`vi' if e(sample), residuals
+    scalar k_sel_`vi' = e(df_m)
+
+    di "    R²         = " %6.4f e(r2)
+    di "    Paramètres = " e(df_m)
+    di "    AIC        = " %8.2f e(N)*ln(e(rss)/e(N)) + 2*e(df_m)
+
+    local i = `i' + 1
+}
+
+/*-----------------------------------------------------------
+  ÉTAPE 4 : Persistance via densité spectrale (Bartlett)
+  P²ᵢ = f̂(0)ᵢᵢ / σ²ᵢ
+-----------------------------------------------------------*/
+
+quietly regress `= word("`secteurs'",1)' L(1/`p').`= word("`secteurs'",1)'
+scalar T_eff = e(N)
+scalar q_nw  = int(T_eff^(1/3))
+
+di _newline(1)
+di "============================================================"
+di "  ÉTAPE 4 : PERSISTANCE — DENSITÉ SPECTRALE (Bartlett/NW)"
+di "  Seuil |t| > `seuil_t' | q = " q_nw
+di "============================================================"
+di "  " %15s "Secteur" %14s "σ²ᵢ" %14s "f̂(0)ᵢᵢ" ///
+   %8s "P²" %8s "P" "   Interprétation"
+di "  " "{hline 75}"
+
+local i = 1
+foreach vi of local secteurs {
+
+    quietly summarize resid_sel_`vi'
+    scalar sigma2_`vi' = r(Var)
+    scalar f0_`vi'     = sigma2_`vi'
+
+    forvalues j = 1/`=q_nw' {
+        scalar w_j = 1 - `j' / (q_nw + 1)
+        quietly corr resid_sel_`vi' L`j'.resid_sel_`vi', covariance
+        scalar f0_`vi' = f0_`vi' + 2 * w_j * r(cov_12)
+    }
+
+    scalar P_sq_`vi' = f0_`vi' / sigma2_`vi'
+    scalar P_`vi'    = sqrt(abs(P_sq_`vi'))
+
+    local nom_i : word `i' of `noms'
+    local interp ""
+    if      abs(P_`vi' - 1) < 0.05  local interp "Choc permanent (≈RW)"
+    else if P_`vi' > 1               local interp "Amplification"
+    else                             local interp "Atténuation partielle"
+
+    di "  " %15s "`nom_i'" %14.6f sigma2_`vi' %14.6f f0_`vi' ///
+       %8.4f P_sq_`vi' %8.4f P_`vi' "   `interp'"
+
+    local i = `i' + 1
+}
+
+di "  " "{hline 75}"
+
+/*-----------------------------------------------------------
+  ÉTAPE 5 : TEST LR vs VAR(4) non contraint
+-----------------------------------------------------------*/
+
+quietly var `secteurs', lags(1/`p')
+scalar ll_NC = e(ll)
+scalar K_NC  = `m' * (`m'*`p' + 1)
+
+matrix Sigma_sel = J(`m', `m', 0)
+local i = 1
+foreach vi of local secteurs {
+    local j = 1
+    foreach vj of local secteurs {
+        quietly corr resid_sel_`vi' resid_sel_`vj', covariance
+        matrix Sigma_sel[`i', `j'] = r(cov_12)
+        local j = `j' + 1
+    }
+    local i = `i' + 1
+}
+
+scalar ll_sel = -(T_eff/2)*(`m'*ln(2*_pi) + ln(det(Sigma_sel)) + `m')
+
+scalar K_sel = 0
+foreach vi of local secteurs {
+    scalar K_sel = K_sel + k_sel_`vi' + 1
+}
+scalar r_ddl = K_NC - K_sel
+scalar LR    = 2 * (ll_NC - ll_sel)
+scalar pv    = chi2tail(r_ddl, LR)
+
+di _newline(1)
+di "============================================================"
+di "  TEST LR : Modèle sélectif vs VAR(4) non contraint"
+di "============================================================"
+di "  lnL NC       : " %10.4f ll_NC
+di "  lnL sélectif : " %10.4f ll_sel
+di "  LR stat.     : " %10.4f LR
+di "  DDL          : " r_ddl
+di "  p-valeur     : " %10.4f pv
+di "  Seuil 5%     : " %10.4f invchi2tail(r_ddl, 0.05)
+di "  " "{hline 45}"
+if pv >= 0.05 {
+    di "  → Non-rejet H0 : modèle sélectif VALIDE"
+}
+else {
+    di "  → Rejet H0 : modèle sélectif non validé"
+}
+di "============================================================"
+
+* Nettoyage
+foreach vi of local secteurs {
+    capture drop reste_sig_`vi' resid_sel_`vi'
+}
+
+
+
+
