@@ -115,6 +115,296 @@ scalar P_sq  = (2 * _pi * f0_hat) / sigma2
 scalar P_hat = sqrt(abs(P_sq))
 
 
+/*===========================================================
+  DELTA METHOD — se(P_hat) pour P_hat = sqrt(f̂(0)/σ²)
+  Variable : dlninfor | AR(5)
+===========================================================*/
+
+local p = 5
+
+
+quietly summarize resid_dlninfor
+scalar T_eff  = r(N)
+scalar sigma2 = r(Var)
+scalar q_nw   = int(T_eff^(1/3))
+local  q      = q_nw
+
+/*-----------------------------------------------------------
+  Autocovariances γ̂(0)...γ̂(2q) stockées dans GAM
+-----------------------------------------------------------*/
+
+local qmax = 2 * `q'
+matrix GAM = J(`qmax'+1, 1, 0)
+
+forvalues j = 0/`qmax' {
+    if `j' == 0 {
+        matrix GAM[1, 1] = sigma2
+    }
+    else {
+        quietly corr resid_dlninfor L`j'.resid_dlninfor, covariance
+        if r(N) > 0 matrix GAM[`j'+1, 1] = r(cov_12)
+    }
+}
+
+/*-----------------------------------------------------------
+  f̂(0) = γ(0) + 2·Σⱼ w(j)·γ(j)
+-----------------------------------------------------------*/
+
+scalar f0_hat = sigma2
+forvalues j = 1/`q' {
+    scalar w_j  = 1 - `j' / (q_nw + 1)
+    scalar f0_hat = f0_hat + 2 * w_j * GAM[`j'+1, 1]
+}
+scalar P_hat = sqrt(abs(f0_hat / sigma2))
+
+/*-----------------------------------------------------------
+  Matrice Cov(γ̂(j), γ̂(k)) = (1/T)·Σₗ γ̂(|l+j|)·γ̂(|l+k|)
+-----------------------------------------------------------*/
+
+matrix Cov_GAM = J(`q'+1, `q'+1, 0)
+
+forvalues j = 0/`q' {
+    forvalues k = 0/`q' {
+        scalar cov_jk = 0
+        forvalues l = -`q'/`q' {
+            local lj = abs(`l' + `j')
+            local lk = abs(`l' + `k')
+            if `lj' <= `qmax' & `lk' <= `qmax' {
+                scalar cov_jk = cov_jk + GAM[`lj'+1,1] * GAM[`lk'+1,1]
+            }
+        }
+        matrix Cov_GAM[`j'+1, `k'+1] = cov_jk / T_eff
+    }
+}
+
+/*-----------------------------------------------------------
+  Gradient ∂f̂(0)/∂γ(j) :
+    j = 0 → 1
+    j ≥ 1 → 2·w(j)
+-----------------------------------------------------------*/
+
+matrix grad_f0 = J(`q'+1, 1, 0)
+matrix grad_f0[1, 1] = 1
+forvalues j = 1/`q' {
+    scalar w_j = 1 - `j' / (q_nw + 1)
+    matrix grad_f0[`j'+1, 1] = 2 * w_j
+}
+
+/*-----------------------------------------------------------
+  Var(f̂(0)) = grad' · Cov_GAM · grad
+  se(P_hat) = se(f̂(0)) / (2 · P_hat · σ²)
+-----------------------------------------------------------*/
+
+matrix Var_f0        = grad_f0' * Cov_GAM * grad_f0
+scalar se_f0         = sqrt(Var_f0[1,1])
+scalar se_Phat       = se_f0 / (2 * P_hat * sigma2)
+scalar IC_lo         = P_hat - 1.96 * se_Phat
+scalar IC_hi         = P_hat + 1.96 * se_Phat
+
+di _newline(1)
+di "============================================"
+di "  DELTA METHOD — P_hat = sqrt(f̂(0)/σ²)"
+di "============================================"
+di "  P_hat      : " %8.4f P_hat
+di "  se(P_hat)  : " %8.4f se_Phat
+di "  IC 95% bas : " %8.4f IC_lo
+di "  IC 95% haut: " %8.4f IC_hi
+di "============================================"
+
+
+/*===========================================================
+  BOOTSTRAP — ÉCART-TYPE DE LA PERSISTANCE UNIVARIÉE
+  Variable : dlninfor | AR(5)
+  Les deux mesures : P (somme des phi) et P_hat (densité)
+===========================================================*/
+
+/*===========================================================
+  BOOTSTRAP CORRIGÉ — ÉCART-TYPE DE LA PERSISTANCE UNIVARIÉE
+  Variable : dlninfor | AR(5)
+===========================================================*/
+
+local B   = 500
+local p   = 5
+
+/*-----------------------------------------------------------
+  ÉTAPE 1 : Identifier les observations complètes
+  L'AR(5) utilise les obs à partir de t = p+1
+  → on rééchantillonne uniquement sur ces obs
+-----------------------------------------------------------*/
+
+* Valeurs ajustées sur le sample effectif
+capture drop fitted_dlninfor
+gen fitted_dlninfor = dlninfor - resid_dlninfor
+
+* Identifier le range des obs non manquantes
+quietly summarize resid_dlninfor
+scalar T_eff = r(N)
+scalar q_nw  = int(T_eff^(1/3))
+
+* Trouver première et dernière obs non manquante
+quietly count if resid_dlninfor != .
+scalar n_complete = r(N)
+
+* Stocker les résidus dans un vecteur (obs complètes seulement)
+* pour le tirage avec remise
+quietly gen obs_id = _n if resid_dlninfor != .
+quietly summarize obs_id
+scalar first_obs = r(min)
+scalar last_obs  = r(max)
+
+di "  Obs. complètes pour AR(`p') : " n_complete
+di "  Première obs. : " first_obs "  |  Dernière : " last_obs
+di "  Bandwidth q   : " q_nw
+di "  P observé  (somme phi) : " %8.4f P
+di "  P observé  (densité)   : " %8.4f P_hat
+
+/*-----------------------------------------------------------
+  ÉTAPE 2 : BOUCLE BOOTSTRAP
+-----------------------------------------------------------*/
+
+matrix BOOT_P     = J(`B', 1, .)
+matrix BOOT_P_hat = J(`B', 1, .)
+
+di _newline(1) "  Bootstrap en cours (B = `B')..."
+
+preserve
+
+forvalues b = 1/`B' {
+    quietly {
+
+        restore, preserve
+
+        * --- a. Tirer n_complete indices dans [first_obs, last_obs] ---
+        * avec remise, uniquement parmi les obs complètes
+        gen resid_star = .
+        forvalues t = 1/`=n_complete' {
+            * indice aléatoire dans les obs complètes
+            scalar idx = first_obs + floor(runiform() * n_complete)
+            * si idx dépasse last_obs, recadrer
+            if idx > last_obs scalar idx = last_obs
+            replace resid_star = resid_dlninfor[idx] ///
+                in `=first_obs + `t' - 1'
+        }
+
+        * --- b. Reconstruire dlninfor* sur les obs complètes ---
+        replace dlninfor = fitted_dlninfor + resid_star ///
+            if obs_id >= first_obs & obs_id <= last_obs
+
+        * --- c. Ré-estimer AR(5) ---
+        capture drop resid_b
+        regress dlninfor L(1/`p').dlninfor ///
+            if obs_id >= first_obs & obs_id <= last_obs
+
+        * Vérifier qu'on a assez d'obs
+        if e(N) < `p' + 2 {
+            drop resid_star
+            continue
+        }
+
+        * P* via somme des phi
+        scalar sp = 0
+        forvalues k = 1/`p' {
+            scalar sp = sp + _b[L`k'.dlninfor]
+        }
+
+        * Eviter division par zéro ou explosion
+        if abs(1 - sp) < 1e-6 {
+            matrix BOOT_P[`b', 1] = .
+        }
+        else {
+            matrix BOOT_P[`b', 1] = abs(1 / (1 - sp))
+        }
+
+        * Résidus pour densité spectrale
+        predict resid_b if obs_id >= first_obs & obs_id <= last_obs, residuals
+
+        * P*_hat via densité spectrale
+        summarize resid_b
+        if r(N) < q_nw + 2 {
+            matrix BOOT_P_hat[`b', 1] = .
+            drop resid_star
+            continue
+        }
+
+        scalar sig2_b = r(Var)
+        scalar f0_b   = sig2_b
+
+        forvalues j = 1/`=q_nw' {
+            scalar w_j = 1 - `j' / (q_nw + 1)
+            capture corr resid_b L`j'.resid_b, covariance
+            if _rc == 0 {
+                scalar f0_b = f0_b + 2 * w_j * r(cov_12)
+            }
+        }
+
+        matrix BOOT_P_hat[`b', 1] = sqrt(abs(f0_b / sig2_b))
+
+        drop resid_star
+    }
+
+    if mod(`b', 100) == 0 di "  ... `b'/`B'"
+}
+
+restore
+
+/*-----------------------------------------------------------
+  ÉTAPE 3 : Calcul écarts-types et IC 95%
+  On ignore les réplications manquantes (.)
+-----------------------------------------------------------*/
+
+svmat BOOT_P,     name(boot_P_tmp)
+svmat BOOT_P_hat, name(boot_Phat_tmp)
+
+* --- P via somme phi ---
+quietly summarize boot_P_tmp1
+scalar se_P     = r(sd)
+scalar mean_P_b = r(mean)
+scalar B_valid_P = r(N)
+quietly centile boot_P_tmp1, centile(2.5 97.5)
+scalar ic_lo_P  = r(c_1)
+scalar ic_hi_P  = r(c_2)
+
+* --- P via densité ---
+quietly summarize boot_Phat_tmp1
+scalar se_Phat     = r(sd)
+scalar mean_Phat_b = r(mean)
+scalar B_valid_Phat = r(N)
+quietly centile boot_Phat_tmp1, centile(2.5 97.5)
+scalar ic_lo_Phat  = r(c_1)
+scalar ic_hi_Phat  = r(c_2)
+
+drop boot_P_tmp1 boot_Phat_tmp1
+
+/*-----------------------------------------------------------
+  ÉTAPE 4 : Affichage
+-----------------------------------------------------------*/
+
+di _newline(1)
+di "=========================================================="
+di "  RÉSULTATS BOOTSTRAP — Persistance univariée dlninfor"
+di "  AR(`p') | B = `B' | q = " q_nw
+di "=========================================================="
+di "  " %25s " " %8s "P obs." %10s "Moy.boot" ///
+   %8s "se(P)" %22s "IC 95%"  %8s "B valides"
+di "  " "{hline 85}"
+di "  " %25s "Somme phi" ///
+   %8.4f P %10.4f mean_P_b %8.4f se_P ///
+   "   [" %6.4f ic_lo_P " ; " %6.4f ic_hi_P "]" ///
+   %8.0f B_valid_P
+di "  " %25s "Densité spectrale" ///
+   %8.4f P_hat %10.4f mean_Phat_b %8.4f se_Phat ///
+   "   [" %6.4f ic_lo_Phat " ; " %6.4f ic_hi_Phat "]" ///
+   %8.0f B_valid_Phat
+di "  " "{hline 85}"
+di "  Biais (somme phi)  : " %8.4f mean_P_b   - P
+di "  Biais (densité)    : " %8.4f mean_Phat_b - P_hat
+di "=========================================================="
+
+capture drop fitted_dlninfor obs_id
+
+
+
+
 ********* Persistance multisectorielle
 local vars "D.lnagri D.lnman D.lncom D.lntran D.lnheb D.lnimmo D.lnautre"
 varsoc `vars' //Il y a 4 retards d'après les critères d'information
@@ -223,6 +513,89 @@ foreach var of local secteurs {
 
 di "  " "{hline 75}"
 di "============================================================"
+
+
+/*===========================================================
+  DELTA METHOD — se(P_i) pour chaque secteur
+  P_i = sqrt(f̂(0)ᵢᵢ / σ²ᵢ)
+  se(P_i) = se(f̂(0)ᵢᵢ) / (2 · P_i · σ²ᵢ)
+===========================================================*/
+
+local q = q_nw
+
+di _newline(1)
+di "============================================================"
+di "  DELTA METHOD — se(P_i) | VAR(4) | 7 secteurs | q=" q_nw
+di "============================================================"
+di "  " %15s "Secteur" %8s "P_i" %10s "se(P_i)" %22s "IC 95%" 
+di "  " "{hline 60}"
+
+foreach var of local secteurs {
+
+    local qmax = 2 * `q'
+
+    /*-------------------------------------------------------
+      Autocovariances γ̂(0)...γ̂(2q) du résidu du secteur
+    -------------------------------------------------------*/
+    matrix GAM_`var' = J(`qmax'+1, 1, 0)
+    matrix GAM_`var'[1, 1] = sigma2_`var'
+
+    forvalues j = 1/`qmax' {
+        quietly corr resid_`var' L`j'.resid_`var', covariance
+        if r(N) > 0 matrix GAM_`var'[`j'+1, 1] = r(cov_12)
+    }
+
+    /*-------------------------------------------------------
+      Matrice Cov(γ̂(j), γ̂(k)) = (1/T)·Σₗ γ̂(|l+j|)·γ̂(|l+k|)
+    -------------------------------------------------------*/
+    matrix Cov_GAM_`var' = J(`q'+1, `q'+1, 0)
+
+    forvalues j = 0/`q' {
+        forvalues k = 0/`q' {
+            scalar cov_jk = 0
+            forvalues l = -`q'/`q' {
+                local lj = abs(`l' + `j')
+                local lk = abs(`l' + `k')
+                if `lj' <= `qmax' & `lk' <= `qmax' {
+                    scalar cov_jk = cov_jk + ///
+                        GAM_`var'[`lj'+1,1] * GAM_`var'[`lk'+1,1]
+                }
+            }
+            matrix Cov_GAM_`var'[`j'+1, `k'+1] = cov_jk / T_eff
+        }
+    }
+
+    /*-------------------------------------------------------
+      Gradient ∂f̂(0)/∂γ(j) :
+        j = 0 → 1
+        j ≥ 1 → 2·w(j)
+    -------------------------------------------------------*/
+    matrix grad_`var' = J(`q'+1, 1, 0)
+    matrix grad_`var'[1, 1] = 1
+    forvalues j = 1/`q' {
+        scalar w_j = 1 - `j' / (q_nw + 1)
+        matrix grad_`var'[`j'+1, 1] = 2 * w_j
+    }
+
+    /*-------------------------------------------------------
+      Var(f̂(0)) = grad' · Cov_GAM · grad
+      se(P_i)   = se(f̂(0)) / (2 · P_i · σ²ᵢ)
+    -------------------------------------------------------*/
+    matrix Var_f0_`var' = grad_`var'' * Cov_GAM_`var' * grad_`var'
+    scalar se_f0_`var'  = sqrt(abs(Var_f0_`var'[1,1]))
+    scalar se_P_`var'   = se_f0_`var' / (2 * P_`var' * sigma2_`var')
+    scalar IC_lo_`var'  = P_`var' - 1.96 * se_P_`var'
+    scalar IC_hi_`var'  = P_`var' + 1.96 * se_P_`var'
+
+    local nom : word `i' of `noms'
+    di "  " %15s "`var'" %8.4f P_`var' %10.4f se_P_`var' ///
+       "   [" %6.4f IC_lo_`var' " ; " %6.4f IC_hi_`var' "]"
+}
+
+di "  " "{hline 60}"
+di "  IC 95% = P_i ± 1.96·se(P_i)"
+di "============================================================"
+
 
 
 /*===========================================================
@@ -369,6 +742,89 @@ foreach var of local secteurs {
 
 di "  " "{hline 78}"
 
+
+/*===========================================================
+  DELTA METHOD — se(P_i) pour le modèle contraint
+  Même logique que le VAR : on travaille sur les résidus
+  déjà disponibles (resid_`var')
+===========================================================*/
+
+local q = q_nw
+
+di _newline(1)
+di "============================================================"
+di "  DELTA METHOD — se(P_i) | Modèle contraint | q=" q_nw
+di "============================================================"
+di "  " %15s "Secteur" %8s "P_i" %10s "se(P_i)" %22s "IC 95%"
+di "  " "{hline 60}"
+
+local i = 1
+foreach var of local secteurs {
+
+    local qmax = 2 * `q'
+
+    /*-------------------------------------------------------
+      Autocovariances γ̂(0)...γ̂(2q)
+    -------------------------------------------------------*/
+    matrix GAM_`var' = J(`qmax'+1, 1, 0)
+    matrix GAM_`var'[1, 1] = sigma2_`var'
+
+    forvalues j = 1/`qmax' {
+        quietly corr resid_`var' L`j'.resid_`var', covariance
+        if r(N) > 0 matrix GAM_`var'[`j'+1, 1] = r(cov_12)
+    }
+
+    /*-------------------------------------------------------
+      Cov(γ̂(j), γ̂(k)) = (1/T)·Σₗ γ̂(|l+j|)·γ̂(|l+k|)
+    -------------------------------------------------------*/
+    matrix Cov_GAM_`var' = J(`q'+1, `q'+1, 0)
+
+    forvalues j = 0/`q' {
+        forvalues k = 0/`q' {
+            scalar cov_jk = 0
+            forvalues l = -`q'/`q' {
+                local lj = abs(`l' + `j')
+                local lk = abs(`l' + `k')
+                if `lj' <= `qmax' & `lk' <= `qmax' {
+                    scalar cov_jk = cov_jk + ///
+                        GAM_`var'[`lj'+1,1] * GAM_`var'[`lk'+1,1]
+                }
+            }
+            matrix Cov_GAM_`var'[`j'+1, `k'+1] = cov_jk / T_eff
+        }
+    }
+
+    /*-------------------------------------------------------
+      Gradient : ∂f̂(0)/∂γ(0) = 1  |  ∂f̂(0)/∂γ(j) = 2w(j)
+    -------------------------------------------------------*/
+    matrix grad_`var' = J(`q'+1, 1, 0)
+    matrix grad_`var'[1, 1] = 1
+    forvalues j = 1/`q' {
+        scalar w_j = 1 - `j' / (q_nw + 1)
+        matrix grad_`var'[`j'+1, 1] = 2 * w_j
+    }
+
+    /*-------------------------------------------------------
+      Var(f̂(0)) = grad' · Cov_GAM · grad
+      se(P_i)   = se(f̂(0)) / (2 · P_i · σ²ᵢ)
+    -------------------------------------------------------*/
+    matrix Var_f0_`var'  = grad_`var'' * Cov_GAM_`var' * grad_`var'
+    scalar se_f0_`var'   = sqrt(abs(Var_f0_`var'[1,1]))
+    scalar se_P_`var'    = se_f0_`var' / (2 * P_`var' * sigma2_`var')
+    scalar IC_lo_`var'   = P_`var' - 1.96 * se_P_`var'
+    scalar IC_hi_`var'   = P_`var' + 1.96 * se_P_`var'
+
+    local nom : word `i' of `noms'
+    di "  " %15s "`nom'" %8.4f P_`var' %10.4f se_P_`var' ///
+       "   [" %6.4f IC_lo_`var' " ; " %6.4f IC_hi_`var' "]"
+
+    local i = `i' + 1
+}
+
+di "  " "{hline 60}"
+di "  IC 95% = P_i ± 1.96·se(P_i)"
+di "============================================================"
+
 /*-----------------------------------------------------------
   ÉTAPE 4 : Comparaison VAR non contraint vs modèle contraint
 -----------------------------------------------------------*/
@@ -500,7 +956,6 @@ foreach vi of local secteurs {
 
     * Pour chaque j≠i : vérifier si au moins un lag |t| > seuil
     local sig_vars_`vi' ""
-	
     local j = 1
     foreach vj of local secteurs {
 
@@ -514,6 +969,8 @@ foreach vi of local secteurs {
 
             forvalues k = 1/`p' {
                 scalar t_k = _b[L`k'.`vj'] / _se[L`k'.`vj']
+				di "nn"
+				
 				local t_vals "`t_vals' `=string(abs(t_k), "%5.2f")'"
                 *local t_vals "`t_vals' " %5.2f abs(t_k)
 
@@ -659,6 +1116,87 @@ foreach vi of local secteurs {
 }
 
 di "  " "{hline 75}"
+
+
+/*===========================================================
+  DELTA METHOD — se(P_i) | Modèle sélectif |t| > 1.5
+===========================================================*/
+
+local q = q_nw
+
+di _newline(1)
+di "============================================================"
+di "  DELTA METHOD — se(P_i) | Modèle sélectif | q=" q_nw
+di "============================================================"
+di "  " %15s "Secteur" %8s "P_i" %10s "se(P_i)" %22s "IC 95%"
+di "  " "{hline 60}"
+
+local i = 1
+foreach vi of local secteurs {
+
+    local qmax = 2 * `q'
+
+    /*-------------------------------------------------------
+      Autocovariances γ̂(0)...γ̂(2q) sur resid_sel_`vi'
+    -------------------------------------------------------*/
+    matrix GAM_`vi' = J(`qmax'+1, 1, 0)
+    matrix GAM_`vi'[1, 1] = sigma2_`vi'
+
+    forvalues j = 1/`qmax' {
+        quietly corr resid_sel_`vi' L`j'.resid_sel_`vi', covariance
+        if r(N) > 0 matrix GAM_`vi'[`j'+1, 1] = r(cov_12)
+    }
+
+    /*-------------------------------------------------------
+      Cov(γ̂(j), γ̂(k)) = (1/T)·Σₗ γ̂(|l+j|)·γ̂(|l+k|)
+    -------------------------------------------------------*/
+    matrix Cov_GAM_`vi' = J(`q'+1, `q'+1, 0)
+
+    forvalues j = 0/`q' {
+        forvalues k = 0/`q' {
+            scalar cov_jk = 0
+            forvalues l = -`q'/`q' {
+                local lj = abs(`l' + `j')
+                local lk = abs(`l' + `k')
+                if `lj' <= `qmax' & `lk' <= `qmax' {
+                    scalar cov_jk = cov_jk + ///
+                        GAM_`vi'[`lj'+1,1] * GAM_`vi'[`lk'+1,1]
+                }
+            }
+            matrix Cov_GAM_`vi'[`j'+1, `k'+1] = cov_jk / T_eff
+        }
+    }
+
+    /*-------------------------------------------------------
+      Gradient : ∂f̂(0)/∂γ(0) = 1  |  ∂f̂(0)/∂γ(j) = 2w(j)
+    -------------------------------------------------------*/
+    matrix grad_`vi' = J(`q'+1, 1, 0)
+    matrix grad_`vi'[1, 1] = 1
+    forvalues j = 1/`q' {
+        scalar w_j = 1 - `j' / (q_nw + 1)
+        matrix grad_`vi'[`j'+1, 1] = 2 * w_j
+    }
+
+    /*-------------------------------------------------------
+      Var(f̂(0)) = grad' · Cov_GAM · grad
+      se(P_i)   = se(f̂(0)) / (2 · P_i · σ²ᵢ)
+    -------------------------------------------------------*/
+    matrix Var_f0_`vi' = grad_`vi'' * Cov_GAM_`vi' * grad_`vi'
+    scalar se_f0_`vi'  = sqrt(abs(Var_f0_`vi'[1,1]))
+    scalar se_P_`vi'   = se_f0_`vi' / (2 * P_`vi' * sigma2_`vi')
+    scalar IC_lo_`vi'  = P_`vi' - 1.96 * se_P_`vi'
+    scalar IC_hi_`vi'  = P_`vi' + 1.96 * se_P_`vi'
+
+    local nom_i : word `i' of `noms'
+    di "  " %15s "`nom_i'" %8.4f P_`vi' %10.4f se_P_`vi' ///
+       "   [" %6.4f IC_lo_`vi' " ; " %6.4f IC_hi_`vi' "]"
+
+    local i = `i' + 1
+}
+
+di "  " "{hline 60}"
+di "  IC 95% = P_i ± 1.96·se(P_i)"
+di "============================================================"
 
 /*-----------------------------------------------------------
   ÉTAPE 5 : TEST LR vs VAR(4) non contraint
