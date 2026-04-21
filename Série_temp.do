@@ -1,4 +1,4 @@
-cd "D:\Users\hp\Documents\bibliothèque de travail\2 Elève ingénieur\ISE\Cours\ISE3\Tronc commun\UE15 Recherche\Groupe de travail\data\raw"
+cd "C:\Users\USER\Desktop\ISE3_2025\GT\base"
 
 clear all
 set more off
