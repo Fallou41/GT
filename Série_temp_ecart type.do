@@ -1,6 +1,6 @@
 cd "C:\Users\USER\Desktop\ISE3_2025\GT\base"
 
-*cd "D:\Users\hp\Documents\bibliothèque de travail\2 Elève ingénieur\ISE\Cours\ISE3\Tronc commun\UE15 Recherche\Groupe de travail\data\raw"
+cd "D:\Users\hp\Documents\bibliothèque de travail\2 Elève ingénieur\ISE\Cours\ISE3\Tronc commun\UE15 Recherche\Groupe de travail\data\raw"
 
 clear all
 set more off
@@ -23,25 +23,21 @@ tsset Annee
 ********* Cointégration
 local vars "lnagri lnman lncom lntran lnheb lnimmo lnautre"
 varsoc `vars'
+*on a 4 comme p optimal
 vecrank `vars', lag(4) trace
 vecrank `vars', lag(4) max
 *ttttt
+*on a 5 relation de cointégration
 
 
 *************** Calcul des persistances globale
-
-
 gen lninfor = ln(informel)
 ** On regresse la variable différenciée
 gen dlninfor = D.lninfor
 
-
-
 dfuller lninfor
 
 dfuller dlninfor
-
-
 
 ac dlninfor
 
@@ -52,12 +48,10 @@ twoway (line dlninfor Annee)
 twoway (line lninfor Annee)
 
 
-
-
-*************** Calcul des persistances globale univariée
+*************** Calcul des persistances globales univariées
 ***La persistance avec un AR
 ** Sélection de lag optimal
-varsoc dlninfor, maxlag(5) // Le lag optimal est 5. 
+varsoc dlninfor, maxlag(6) // Le lag optimal est 5. 
 *** On a un AR(5)
 regress dlninfor L(1/5).dlninfor
 scalar somme_phi = _b[L1.dlninfor] + _b[L2.dlninfor] + _b[L3.dlninfor] + _b[L4.dlninfor] + _b[L5.dlninfor]
